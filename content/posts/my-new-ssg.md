@@ -3,7 +3,6 @@ title: "SSGを自作した話"
 date: 2026-11-03
 description: 誰でもフルスクラッチでツールを作る時代の話
 tags: [rust]
-draft: true
 ---
 
 ## 作ったもの
