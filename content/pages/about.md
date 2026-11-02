@@ -1,21 +1,17 @@
 ---
 title: About
-description: このブログと bare について。
+description: このブログについて
 nav: 1
 ---
 
-## このサイトについて
+## このブログについて
 
-これは [bare](https://github.com/Nagatani/bare) のデモサイトです。
-フォークすると、このページを自分のプロフィールに書き換えて使えます。
+これは自作のSSGである [bare](https://github.com/Nagatani/bare) の実稼働例です。
 
-## 固定ページの作り方
+なぜ書き始めたか、みたいなものは [Hello,World!!](hello-world.html) で書いてます。
 
-`content/pages/` に Markdown を置くと、サイトのルートに HTML として出力されます。
-このページは `content/pages/about.md` から `about.html` として生成されています。
+## 書いている人
 
-- `nav: 1` のように番号を書くと、ヘッダーのナビゲーションに番号順で表示されます
-- `nav` を書かなければ、ナビゲーションには出ません（リンクだけで辿れるページになります）
-- 記事と違って日付やタグはなく、フィードにも含まれません
+Nagatani
 
-使える項目は [記事の書き方](posts/writing-guide.html#固定ページ) にまとめています。
+- [https://nagatani.me/](https://nagatani.me/)
