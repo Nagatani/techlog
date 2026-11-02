@@ -8,7 +8,7 @@ nav: 1
 
 これは自作のSSGである [bare](https://github.com/Nagatani/bare) の実稼働例です。
 
-なぜ書き始めたか、みたいなものは [Hello,World!!](hello-world.html) で書いてます。
+なぜ書き始めたか、みたいなものは [Hello,World!!](posts/hello-world.html) で書いてます。
 
 ## 書いている人
 
