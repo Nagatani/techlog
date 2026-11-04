@@ -3,7 +3,6 @@ title: "NFCタグの活用方法を考える - その2"
 date: 2026-11-05
 description: 盗難自体を防ぐことはできないので、盗難をした人へできる限りの意趣返しをしたい
 tags: [NFC, BehavioralDesign]
-draft: true
 ---
 
 ## NFCタグが余ってる
