@@ -35,6 +35,11 @@ const WORKERS: usize = 4;
 /// A Chrome that hangs (e.g. on a font it cannot load) is killed after this.
 const TIMEOUT: Duration = Duration::from_secs(30);
 
+/// How many times to try rendering a card before giving up. A cold-start
+/// Chrome on CI can time out on its first launch while initializing a fresh
+/// profile, then succeed immediately on the next attempt.
+const ATTEMPTS: usize = 2;
+
 /// One image to produce: the card's HTML and the PNG file to write.
 pub struct Card {
     pub html: String,
@@ -100,7 +105,7 @@ fn render_in(cards: &[Card], chrome: Option<&Path>, cache: &Path) -> Outcome {
                 // Chrome refuses to share a profile between running instances.
                 let profile = cache.join(format!("profile-{worker}"));
                 while let Some((card, cached)) = pending.get(next.fetch_add(1, Ordering::Relaxed)) {
-                    let result = screenshot(chrome, &profile, &card.html, cached)
+                    let result = screenshot_with_retry(chrome, &profile, &card.html, cached)
                         .and_then(|()| copy_to(cached, &card.target));
                     results.lock().unwrap().push((card.target.clone(), result));
                 }
@@ -121,11 +126,28 @@ fn render_in(cards: &[Card], chrome: Option<&Path>, cache: &Path) -> Outcome {
     outcome
 }
 
+/// Retries [`screenshot`] up to [`ATTEMPTS`] times so a transient cold-start
+/// timeout does not leave a page without an OGP image.
+fn screenshot_with_retry(chrome: &Path, profile: &Path, html: &str, png: &Path) -> io::Result<()> {
+    let mut last_err = None;
+    for _ in 0..ATTEMPTS {
+        match screenshot(chrome, profile, html, png) {
+            Ok(()) => return Ok(()),
+            Err(err) => last_err = Some(err),
+        }
+    }
+    Err(last_err.expect("ATTEMPTS is at least 1"))
+}
+
 /// Renders `html` to `png` with Chrome, through a temporary file next to it.
 fn screenshot(chrome: &Path, profile: &Path, html: &str, png: &Path) -> io::Result<()> {
     let page = png.with_extension("html");
+    let log = png.with_extension("log");
     fs::write(&page, html)?;
     let page_url = file_url(&fs::canonicalize(&page)?);
+    // Redirect stderr to a file rather than a pipe so Chrome cannot block on a
+    // full pipe buffer while we wait, and we still get diagnostics on failure.
+    let stderr = fs::File::create(&log).map_or_else(|_| Stdio::null(), Stdio::from);
     let mut child = Command::new(chrome)
         .args([
             "--headless=new",
@@ -133,6 +155,8 @@ fn screenshot(chrome: &Path, profile: &Path, html: &str, png: &Path) -> io::Resu
             // it fails to start on Ubuntu runners that restrict user namespaces.
             "--no-sandbox",
             "--disable-gpu",
+            "--disable-dev-shm-usage",
+            "--disable-background-networking",
             "--hide-scrollbars",
             "--no-first-run",
             "--no-default-browser-check",
@@ -144,8 +168,7 @@ fn screenshot(chrome: &Path, profile: &Path, html: &str, png: &Path) -> io::Resu
         .arg(page_url)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        // Chrome logs harmless errors on every run; keep the build output clean.
-        .stderr(Stdio::null())
+        .stderr(stderr)
         .spawn()?;
 
     let started = Instant::now();
@@ -157,7 +180,13 @@ fn screenshot(chrome: &Path, profile: &Path, html: &str, png: &Path) -> io::Resu
             let _ = child.kill();
             let _ = child.wait();
             let _ = fs::remove_file(&page);
-            return Err(io::Error::new(io::ErrorKind::TimedOut, "Chrome timed out"));
+            let detail = read_log_snippet(&log);
+            let _ = fs::remove_file(&log);
+            let message = match detail {
+                Some(detail) => format!("Chrome timed out ({detail})"),
+                None => "Chrome timed out".to_string(),
+            };
+            return Err(io::Error::new(io::ErrorKind::TimedOut, message));
         }
         thread::sleep(Duration::from_millis(50));
     };
@@ -165,9 +194,40 @@ fn screenshot(chrome: &Path, profile: &Path, html: &str, png: &Path) -> io::Resu
     if !status.success() || !is_png(png) {
         // A half-written file must not be served from the cache next time.
         let _ = fs::remove_file(png);
-        return Err(io::Error::other(format!("Chrome failed ({status})")));
+        let detail = read_log_snippet(&log);
+        let _ = fs::remove_file(&log);
+        let message = match detail {
+            Some(detail) => format!("Chrome failed ({status}: {detail})"),
+            None => format!("Chrome failed ({status})"),
+        };
+        return Err(io::Error::other(message));
     }
+    let _ = fs::remove_file(&log);
     Ok(())
+}
+
+/// Returns a short, single-line summary of Chrome's stderr log, if non-empty.
+fn read_log_snippet(path: &Path) -> Option<String> {
+    let text = fs::read_to_string(path).ok()?;
+    let summary: String = text
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .rev()
+        .take(3)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect::<Vec<_>>()
+        .join(" | ");
+    if summary.is_empty() {
+        return None;
+    }
+    let mut out = String::new();
+    for ch in summary.chars().take(240) {
+        out.push(ch);
+    }
+    Some(out)
 }
 
 /// The Chrome to use: `BARE_CHROME` if set, else a known name on `PATH`, else
@@ -211,9 +271,9 @@ fn prune(cache: &Path, cards: &[Card]) {
     for entry in entries.flatten() {
         let name = entry.file_name().to_string_lossy().into_owned();
         let stale_png = name.ends_with(".png") && !keep.contains(&name);
-        // A card page left behind by a killed build.
-        let leftover_page = name.ends_with(".html");
-        if stale_png || leftover_page {
+        // A card page or stderr log left behind by a killed build.
+        let leftover = name.ends_with(".html") || name.ends_with(".log");
+        if stale_png || leftover {
             let _ = fs::remove_file(entry.path());
         }
     }
@@ -358,15 +418,41 @@ mod tests {
         let outcome = render_in(&cards, Some(&failing), &cache);
         assert_eq!((outcome.written.len(), outcome.cached), (2, 2));
 
-        // A failing Chrome gives a warning and leaves nothing in the cache.
+        // A failing Chrome gives a warning (including stderr) and leaves nothing in the cache.
+        let failing_with_log = script(&dir.join("failing-log"), "echo 'boom' >&2\nexit 1");
         let new = [Card {
             html: "<p>new</p>".into(),
             target: dir.join("out/new.png"),
         }];
-        let outcome = render_in(&new, Some(&failing), &cache);
+        let outcome = render_in(&new, Some(&failing_with_log), &cache);
         assert!(outcome.written.is_empty());
         assert_eq!(outcome.warnings.len(), 1);
+        assert!(
+            outcome.warnings[0].contains("boom"),
+            "stderr should be included: {:?}",
+            outcome.warnings
+        );
         assert!(!cache.join(format!("{}.png", hash("<p>new</p>"))).exists());
+
+        // A Chrome that fails on the first attempt is retried and succeeds.
+        let marker = dir.join("flaky-seen");
+        let flaky = script(
+            &dir.join("flaky-chrome"),
+            &format!(
+                "if [ ! -f \"{m}\" ]; then touch \"{m}\"; exit 1; fi\n\
+                 for a in \"$@\"; do case \"$a\" in --screenshot=*) out=\"${{a#--screenshot=}}\";; esac; done\n\
+                 printf '\\211PNG\\r\\n\\032\\nfake' > \"$out\"",
+                m = marker.display()
+            ),
+        );
+        let retry = [Card {
+            html: "<p>retry</p>".into(),
+            target: dir.join("out/retry.png"),
+        }];
+        let outcome = render_in(&retry, Some(&flaky), &cache);
+        assert_eq!(outcome.written, [dir.join("out/retry.png")]);
+        assert!(outcome.warnings.is_empty(), "{:?}", outcome.warnings);
+        assert!(is_png(&dir.join("out/retry.png")));
         fs::remove_dir_all(&dir).unwrap();
     }
 }
