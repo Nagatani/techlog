@@ -60,7 +60,7 @@ tags: [NFC, BehavioralDesign]
 
 通知は以下のような表示になります。
 
-![](/images/nfc-storen-1.png)
+![nfc通知1](/images/nfc-storen-1.png)
 
 
 ## スマホのセキュリティ
@@ -88,11 +88,11 @@ AirTag、高いですよね。
 
 盗んだ相手に、「ヤバい、バレたかも」「どこかに返してこの状況を終わらせたい」という焦りを利用し、元の傘立てに戻すアクションを取らせることができたらいいなーと思っています。
 
-![](/images/nfc-storen-2.png)
+![nfc通知2](/images/nfc-storen-2.png)
 
 返却ボタンを押したあとの警告メッセージ:
 
-![](/images/nfc-storen-3.png)
+![nfc通知3](/images/nfc-storen-3.png)
 
 
 ## 誤作動・リロード対策
